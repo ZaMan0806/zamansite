@@ -26,10 +26,10 @@ export default function Home() {
             <div className="flex flex-wrap gap-2">
               <span className="text-sm font-mono px-3 py-1 border border-orange-300/70 text-white/90">Java</span>
               <span className="text-sm font-mono px-3 py-1 border border-purple-400/70 text-white/90">Kotlin</span>
-              <span className="text-sm font-mono px-3 py-1 border border-blue-400/70 text-white/70">Go</span>
-              <span className="text-sm font-mono px-3 py-1 border border-cyan-600/70 text-white/70">MySQL</span>
-              <span className="text-sm font-mono px-3 py-1 border border-blue-500/70 text-white/70">Docker</span>
-              <span className="text-sm font-mono px-3 py-1 border border-orange-400/70 text-white/70">AWS</span>
+              <span className="text-sm font-mono px-3 py-1 border border-blue-400/70 text-white/90">Go</span>
+              <span className="text-sm font-mono px-3 py-1 border border-cyan-600/70 text-white/90">MySQL</span>
+              <span className="text-sm font-mono px-3 py-1 border border-blue-500/70 text-white/90">Docker</span>
+              <span className="text-sm font-mono px-3 py-1 border border-orange-400/70 text-white/90">AWS</span>
             </div>
           </div>
           <div className="flex flex-col gap-3">
