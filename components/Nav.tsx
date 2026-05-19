@@ -13,28 +13,6 @@ export default function Nav({ active }: NavProps) {
       >
         ZaMan&apos;s SITE
       </Link>
-      <div className="flex items-center">
-        <Link
-          href="/wiki"
-          className={`text-sm px-5 h-14 flex items-center border-l border-white/10 transition-colors ${
-            active === "wiki"
-              ? "text-white"
-              : "text-white/40 hover:text-white"
-          }`}
-        >
-          Wiki
-        </Link>
-        <Link
-          href="/resume"
-          className={`text-sm px-5 h-14 flex items-center border-l border-white/10 transition-colors ${
-            active === "resume"
-              ? "text-white"
-              : "text-white/40 hover:text-white"
-          }`}
-        >
-          Resume
-        </Link>
-      </div>
     </nav>
   );
 }
