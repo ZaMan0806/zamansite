@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-const SEQUENCES = ["ZaMan", "Hello :)"];
+const SEQUENCES = ["ZaMan", "Hello World !"];
 const TYPE_SPEED = 120;
 const DELETE_SPEED = 80;
 const PAUSE_AFTER_TYPE = 2500;

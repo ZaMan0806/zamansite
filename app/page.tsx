@@ -17,16 +17,20 @@ export default function Home() {
           <p className="text-white/80 text-lg font-mono tracking-widest uppercase mb-4">
             My Personal Site
           </p>
-          <div className="flex flex-wrap gap-2 max-w-lg mb-12">
-            <span className="text-sm font-mono px-3 py-1 border border-white/30 text-white/90">🤓 배재현</span>
-            <span className="text-sm font-mono px-3 py-1 border border-white/30 text-white/90">🏫 광주소프트웨어마이스터고</span>
-            <span className="text-sm font-mono px-3 py-1 border border-white/30 text-white/90">🔧 Backend Engineer</span>
-            <span className="text-sm font-mono px-3 py-1 border border-orange-300/70 text-white/90">Java</span>
-            <span className="text-sm font-mono px-3 py-1 border border-purple-400/70 text-white/90">Kotlin</span>
-            <span className="text-sm font-mono px-3 py-1 border border-blue-400/70 text-white/70">Go</span>
-            <span className="text-sm font-mono px-3 py-1 border border-cyan-600/70 text-white/70">MySQL</span>
-            <span className="text-sm font-mono px-3 py-1 border border-blue-500/70 text-white/70">Docker</span>
-            <span className="text-sm font-mono px-3 py-1 border border-orange-400/70 text-white/70">AWS</span>
+          <div className="flex flex-col gap-2 mb-12">
+            <div className="flex flex-wrap gap-2">
+              <span className="text-sm font-mono px-3 py-1 border border-white/30 text-white/90">🤓 배재현</span>
+              <span className="text-sm font-mono px-3 py-1 border border-white/30 text-white/90">🏫 광주소프트웨어마이스터고</span>
+              <span className="text-sm font-mono px-3 py-1 border border-white/30 text-white/90">🔧 Backend Engineer</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <span className="text-sm font-mono px-3 py-1 border border-orange-300/70 text-white/90">Java</span>
+              <span className="text-sm font-mono px-3 py-1 border border-purple-400/70 text-white/90">Kotlin</span>
+              <span className="text-sm font-mono px-3 py-1 border border-blue-400/70 text-white/70">Go</span>
+              <span className="text-sm font-mono px-3 py-1 border border-cyan-600/70 text-white/70">MySQL</span>
+              <span className="text-sm font-mono px-3 py-1 border border-blue-500/70 text-white/70">Docker</span>
+              <span className="text-sm font-mono px-3 py-1 border border-orange-400/70 text-white/70">AWS</span>
+            </div>
           </div>
           <div className="flex flex-col gap-3">
             <a
@@ -59,10 +63,10 @@ export default function Home() {
             className="group flex items-center justify-between gap-40 px-8 py-8 border-b border-white/25 hover:bg-white/5 transition-colors"
           >
             <div>
-              <p className="text-xs font-mono tracking-widest uppercase text-white/30 mb-1">
-                knowledge
+              <p className="text-sm font-mono tracking-widest uppercase text-white mb-1">
+                AI가 작성한 글을 봐요
               </p>
-              <p className="text-2xl font-light">AI Tech Wiki</p>
+              <p className="text-3xl font-light">AI Tech Wiki</p>
             </div>
             <span className="text-white/30 group-hover:text-white/70 transition-colors text-xl">
               →
@@ -74,10 +78,10 @@ export default function Home() {
             className="group flex items-center justify-between gap-60 px-8 py-8 hover:bg-white/5 transition-colors"
           >
             <div>
-              <p className="text-xs font-mono tracking-widest uppercase text-white/30 mb-1">
-                about
+              <p className="text-sm font-mono tracking-widest uppercase text-white mb-1">
+                배재현은 누구일까요?
               </p>
-              <p className="text-2xl font-light">Resume</p>
+              <p className="text-3xl font-light">Resume</p>
             </div>
             <span className="text-white/30 group-hover:text-white/70 transition-colors text-xl">
               →
