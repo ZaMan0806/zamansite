@@ -68,3 +68,21 @@ body {
   font-weight: 400;
   -webkit-font-smoothing: antialiased;
 }
+
+/* 본문(prose) 인라인 코드를 회색 칩 형태로.
+   컴포넌트 박스 안의 <code>(Flow.tsx의 codeStyle)와 모양을 맞춘다.
+   단, 코드 블록(pre code) 내부는 제외. */
+.prose :where(code):not(:where(pre code, [class~="not-prose"] *)) {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 0.25rem;
+  padding: 0.1em 0.4em;
+  font-size: 0.85em;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* prose가 인라인 코드에 자동으로 붙이는 백틱 따옴표 제거 */
+.prose :where(code):not(:where(pre code))::before,
+.prose :where(code):not(:where(pre code))::after {
+  content: none;
+}

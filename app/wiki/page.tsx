@@ -2,8 +2,8 @@ import Link from "next/link";
 import { getWikiList } from "@/lib/wiki";
 import Nav from "@/components/Nav";
 
-export default function WikiPage() {
-  const entries = getWikiList();
+export default async function WikiPage() {
+  const entries = await getWikiList();
 
   return (
     <main className="min-h-screen flex flex-col bg-[#0a0a0a] text-white">
@@ -25,7 +25,14 @@ export default function WikiPage() {
                   href={`/wiki/${entry.slug}`}
                   className="group flex items-center justify-between py-6 border-b border-white/10 hover:bg-white/5 transition-colors px-2"
                 >
-                  <span className="text-xl font-light">{entry.title}</span>
+                  <span className="flex flex-col gap-1">
+                    <span className="text-xl font-light">{entry.title}</span>
+                    {entry.description && (
+                      <span className="text-sm text-white/30">
+                        {entry.description}
+                      </span>
+                    )}
+                  </span>
                   <span className="text-white/20 group-hover:text-white/60 transition-colors">
                     →
                   </span>
