@@ -9,8 +9,8 @@ export default async function WikiPage() {
     <main className="min-h-screen flex flex-col bg-[#0a0a0a] text-white">
       <Nav active="wiki" />
 
-      <div className="max-w-3xl mx-auto w-full px-8 py-16">
-        <p className="font-mono text-xs tracking-widest uppercase text-white/30 mb-4">
+      <div className="max-w-5xl mx-auto w-full px-8 py-16">
+        <p className="font-mono text-xs tracking-widest uppercase text-white/60 mb-4">
           knowledge
         </p>
         <h1 className="text-6xl font-bold tracking-tight mb-16">Wiki</h1>
@@ -18,12 +18,12 @@ export default async function WikiPage() {
         {entries.length === 0 ? (
           <p className="text-white/30">아직 글이 없어요.</p>
         ) : (
-          <ul className="flex flex-col border-t border-white/10">
+          <ul className="flex flex-col border-t border-white/40">
             {entries.map((entry) => (
               <li key={entry.slug}>
                 <Link
                   href={`/wiki/${entry.slug}`}
-                  className="group flex items-center justify-between py-6 border-b border-white/10 hover:bg-white/5 transition-colors px-2"
+                  className="group flex items-center justify-between py-6 border-b border-white/40 hover:bg-white/5 transition-colors px-2"
                 >
                   <span className="flex flex-col gap-1">
                     <span className="text-xl font-light">{entry.title}</span>
