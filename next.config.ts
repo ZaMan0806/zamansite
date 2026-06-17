@@ -7,7 +7,13 @@ const nextConfig: NextConfig = {
 };
 
 const withMDX = createMDX({
-  // remark/rehype 플러그인이 필요하면 여기에 추가
+  options: {
+    // Turbopack은 플러그인을 문자열 이름 + 직렬화 가능한 옵션으로만 받는다.
+    // rehype-pretty-code는 Shiki 테마를 문자열로 지정할 수 있어 호환된다.
+    rehypePlugins: [
+      ["rehype-pretty-code", { theme: "github-dark-default", keepBackground: false }],
+    ],
+  },
 });
 
 export default withMDX(nextConfig);
