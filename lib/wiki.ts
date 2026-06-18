@@ -7,10 +7,12 @@ export type WikiMeta = {
   title: string;
   date?: string;
   description?: string;
+  tags?: string[];
 };
 
 export type WikiListItem = WikiMeta & {
   slug: string;
+  tags: string[];
 };
 
 function slugToTitle(slug: string): string {
@@ -44,6 +46,7 @@ export async function getWikiList(): Promise<WikiListItem[]> {
         title: meta.title ?? slugToTitle(slug),
         date: meta.date,
         description: meta.description,
+        tags: meta.tags ?? [],
       };
     })
   );
@@ -52,4 +55,23 @@ export async function getWikiList(): Promise<WikiListItem[]> {
     if (a.date && b.date) return b.date.localeCompare(a.date);
     return a.title.localeCompare(b.title);
   });
+}
+
+/**
+ * 모든 글에 쓰인 태그를 모아 글 수와 함께 반환.
+ * 글이 많은 태그가 먼저 오고, 같으면 가나다순.
+ */
+export async function getWikiTags(): Promise<{ tag: string; count: number }[]> {
+  const list = await getWikiList();
+  const counts = new Map<string, number>();
+
+  for (const item of list) {
+    for (const tag of item.tags) {
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 }
