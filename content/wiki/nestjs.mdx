@@ -1,0 +1,228 @@
+export const metadata = {
+  title: "NestJS — Node 백엔드에 '구조'를 강제하는 프레임워크",
+  date: "2026-06-23",
+  description:
+    "Express는 자유로워서, 규모가 커지면 코드가 사람마다 제멋대로 흩어진다. NestJS는 모듈·컨트롤러·서비스로 자리를 정해주고 의존성 주입으로 조립한다. 그 구조가 무엇을 강제하고 왜 테스트·확장에 유리한지 따라간다",
+  tags: ["백엔드", "Node", "프레임워크"],
+};
+
+# NestJS — Node 백엔드에 '구조'를 강제하는 프레임워크
+
+Node로 백엔드를 짜면 보통 Express부터 만난다. Express는 가볍고 자유롭다 —
+라우트 하나에 함수 하나 붙이면 끝이다. 작은 프로젝트엔 이 자유가 축복이다.
+그런데 기능이 늘고 사람이 늘면 그 자유가 저주가 된다. **어디에 무슨 코드를 둘지
+정해진 규칙이 없어서**, 누구는 라우트 파일에 DB 쿼리를 박고 누구는 따로 빼고,
+폴더 구조도 사람마다 다르다. 시간이 지나면 "이 로직이 대체 어디 있지?"가
+일상이 된다.
+
+NestJS는 이 문제를 **구조를 강제**해서 푼다. "요청을 받는 곳(컨트롤러)", "비즈니스
+로직을 두는 곳(서비스)", "관련된 것들을 묶는 단위(모듈)"의 자리를 정해두고,
+개발자가 그 틀 안에 코드를 채우게 한다. 자유를 일부 줄이는 대신, **누가 짜도
+비슷한 모양**이 나와 큰 팀·큰 코드베이스에서 길을 잃지 않게 한다. Spring을
+써봤다면 익숙할 발상이다 — 실제로 NestJS는 Spring에서 많은 걸 빌려왔다.
+
+<Pipeline
+  stages={[
+    { label: "요청", sub: "HTTP" },
+    { label: "Controller", sub: "받기·응답" },
+    { label: "Service", sub: "로직" },
+    { label: "Repository", sub: "데이터" },
+  ]}
+/>
+
+<Callout type="info" title="Express 위에 얹힌 '의견 있는' 틀">
+  NestJS는 내부적으로 Express(또는 Fastify) 위에서 돈다. 즉 Express를{" "}
+  <strong>대체</strong>한다기보다, 그 위에 <strong>구조와 규칙</strong>을 입힌
+  것이다. "어떻게 짜야 하는가"에 대한 의견(opinion)이 강한 프레임워크라, 그 의견을
+  따르면 일관성을 얻고 거스르면 불편하다.
+</Callout>
+
+---
+
+## 1. 자유가 비용이 되는 지점
+
+왜 굳이 자유를 줄이면서까지 구조를 강제할까? Express의 자유가 어디서 비용으로
+바뀌는지 보면 답이 보인다.
+
+<Steps
+  steps={[
+    {
+      title: "코드 위치가 사람마다 다르다",
+      desc: "정해진 자리가 없어 같은 종류 코드가 흩어진다.",
+      detail: (
+        <p className="m-0">
+          DB 접근·검증·비즈니스 로직이 라우트 핸들러 한 곳에 뭉치거나, 사람마다
+          다른 폴더로 흩어진다. 새 팀원이 <strong>"무엇이 어디 있나"</strong>를
+          파악하는 데만 한참 걸린다.
+        </p>
+      ),
+    },
+    {
+      title: "테스트하기 어려워진다",
+      desc: "로직과 DB·HTTP가 한 덩어리로 엉켜 분리가 안 된다.",
+      detail: (
+        <p className="m-0">
+          핸들러 안에서 DB를 직접 부르면, 그 로직만 떼어 테스트하기가 어렵다. 진짜
+          DB 없이는 검증을 못 한다. <strong>로직과 의존성이 분리</strong>돼 있어야
+          테스트가 쉬워진다.
+        </p>
+      ),
+    },
+    {
+      title: "기능이 늘수록 결합이 심해진다",
+      desc: "여기저기서 서로를 직접 import해 거미줄이 된다.",
+      detail: (
+        <p className="m-0">
+          모듈 경계가 없으면 아무 데서나 아무거나 가져다 쓰게 된다. 하나를 고치면
+          엉뚱한 데가 깨지는 <strong>강한 결합</strong>이 쌓인다. 경계를 강제하면
+          이 거미줄이 줄어든다.
+        </p>
+      ),
+    },
+  ]}
+/>
+
+세 비용의 뿌리는 "정해진 자리와 경계가 없다"는 것이다. NestJS의 구조는 바로 이
+자리와 경계를 미리 그어준다.
+
+---
+
+## 2. 요청이 계층을 타고 흐르는 모습
+
+NestJS의 핵심은 **역할별 계층 분리**다. 요청 하나가 들어오면 컨트롤러 → 서비스
+→ 데이터 계층을 차례로 지난다. 각 층이 한 가지 책임만 갖는다.
+
+<Sequence
+  left="클라이언트"
+  right="Nest 계층"
+  messages={[
+    { from: "left", label: "GET /users/42", note: "Controller가 요청을 받음" },
+    { from: "right", label: "Controller → Service 호출", note: "받기/응답만, 로직은 위임" },
+    { from: "right", label: "Service → Repository 조회", note: "비즈니스 규칙 적용" },
+    { from: "right", label: "Repository → DB", note: "데이터 접근만 담당" },
+    { from: "left", label: "200 OK + JSON", note: "Controller가 결과를 응답으로" },
+  ]}
+/>
+
+<Steps
+  steps={[
+    {
+      title: "Controller — 들어오고 나가는 문",
+      desc: "경로를 매핑하고 요청을 받아 응답으로 돌려주는 일만.",
+      detail: (
+        <p className="m-0">
+          <code>@Get('/users/:id')</code> 같은 데코레이터로 경로를 선언한다.
+          컨트롤러는 <strong>비즈니스 로직을 갖지 않는다</strong> — 받아서 서비스에
+          넘기고, 결과를 응답으로 빚을 뿐이다.
+        </p>
+      ),
+    },
+    {
+      title: "Service — 진짜 일이 일어나는 곳",
+      desc: "비즈니스 규칙·계산·흐름 제어를 담는다.",
+      detail: (
+        <p className="m-0">
+          "이 사용자가 권한이 있나", "할인을 어떻게 계산하나" 같은 핵심 로직이
+          여기 모인다. HTTP·DB 같은 바깥 세계와 분리돼 있어,{" "}
+          <strong>로직만 따로 테스트</strong>하기 좋다.
+        </p>
+      ),
+    },
+    {
+      title: "Module — 관련된 것들을 묶는 단위",
+      desc: "컨트롤러·서비스를 한 기능 단위로 캡슐화한다.",
+      detail: (
+        <p className="m-0">
+          <code>UsersModule</code> 처럼 한 도메인을 묶고, 무엇을 밖으로 공개할지
+          정한다. 모듈 경계가 <strong>"아무거나 가져다 쓰는"을 막아</strong> 결합을
+          낮춘다.
+        </p>
+      ),
+    },
+  ]}
+/>
+
+---
+
+## 3. 핵심 장치: 의존성 주입(DI)
+
+NestJS를 NestJS답게 만드는 한 가지를 꼽으면 **의존성 주입(Dependency
+Injection)**이다. 이름은 거창하지만 발상은 단순하다. 컨트롤러가 자기 손으로
+서비스를 만들지(`new Service()`) 않고, **필요하다고 선언만 하면 프레임워크가
+만들어 넣어준다.** 이 작은 차이가 테스트와 확장을 크게 바꾼다.
+
+<Steps
+  steps={[
+    {
+      title: "직접 만들지 않고 '선언'한다",
+      desc: "생성자에 필요한 것을 적으면 Nest가 넣어준다.",
+      detail: (
+        <p className="m-0">
+          <code>constructor(private users: UsersService)</code> 라고 적으면, Nest가
+          <code> UsersService</code> 인스턴스를 찾아 자동으로 주입한다. 만드는 책임이
+          쓰는 쪽에서 <strong>프레임워크로 옮겨간다</strong>.
+        </p>
+      ),
+    },
+    {
+      title: "그래서 갈아끼우기 쉽다 → 테스트 용이",
+      desc: "진짜 서비스 대신 가짜(mock)를 주입할 수 있다.",
+      detail: (
+        <p className="m-0">
+          테스트할 땐 진짜 DB를 쓰는 서비스 대신 <strong>가짜 구현을 주입</strong>해,
+          컨트롤러 로직만 떼어 검증한다. 직접 <code>new</code> 로 만들었다면 이
+          교체가 불가능하다. DI의 가장 큰 실익이 여기 있다.
+        </p>
+      ),
+    },
+    {
+      title: "재사용·공유가 쉽다",
+      desc: "같은 인스턴스를 여러 곳이 공유(싱글톤)할 수 있다.",
+      detail: (
+        <p className="m-0">
+          Nest는 주입할 대상을 보통 <strong>한 번 만들어 공유</strong>한다. 어디서
+          요청하든 같은 인스턴스를 받으니 자원을 아끼고 상태를 일관되게 관리한다.
+        </p>
+      ),
+    },
+  ]}
+/>
+
+<Callout type="deep" title="데코레이터로 선언하는 스타일">
+  <p className="m-0">
+    NestJS는 <code>@Controller</code>, <code>@Injectable</code>,{" "}
+    <code>@Get</code> 같은 <strong>데코레이터</strong>로 "이건 컨트롤러다", "이건
+    주입 가능한 서비스다"를 표시한다. 명령형으로 일일이 등록하는 대신{" "}
+    <strong>선언</strong>해 두면 프레임워크가 읽어 조립한다. Spring의 애너테이션과
+    같은 발상이라, 한쪽을 알면 다른 쪽이 빨리 익는다.
+  </p>
+</Callout>
+
+<Callout type="warn" title="구조의 값은 규모가 정한다">
+  <p className="m-0">
+    이 모든 구조는 <strong>공짜가 아니다</strong> — 작은 API 하나에도 모듈·
+    컨트롤러·서비스를 갖춰야 해 초기 비용이 있다. 그래서 <strong>아주 작은
+    프로젝트엔 과할</strong> 수 있고, 팀이 크고 오래 갈 코드일수록 그 구조의 값이
+    커진다. "구조를 강제한다"는 장점과 "가볍지 않다"는 단점은 한 동전의 양면이다.
+  </p>
+</Callout>
+
+정리하면 NestJS는 Express의 자유가 비용이 되는 지점에서, 모듈·컨트롤러·서비스로
+자리를 정하고 의존성 주입으로 조립해 **일관성·테스트 용이성·낮은 결합**을
+가져온다. 그 대가로 무게와 학습 비용을 치른다. 작은 일엔 과하지만, 크고 오래
+가는 백엔드엔 길을 잃지 않게 하는 골격이 된다.
+
+---
+
+## 한 장 요약
+
+<Steps
+  steps={[
+    { title: "문제", desc: "Express는 자유로워 규모가 커지면 코드 위치·경계가 사람마다 흩어진다." },
+    { title: "해법", desc: "모듈·컨트롤러·서비스로 자리를 강제해 누가 짜도 비슷한 구조를 만든다." },
+    { title: "계층", desc: "Controller(받기·응답) → Service(로직) → Repository(데이터)로 책임 분리." },
+    { title: "DI", desc: "필요한 걸 직접 만들지 않고 선언 → 프레임워크가 주입 → 갈아끼우기 쉬움." },
+    { title: "테스트", desc: "가짜를 주입해 로직만 떼어 검증 — 분리된 구조의 가장 큰 실익." },
+    { title: "전제", desc: "구조는 공짜가 아니다 — 작은 프로젝트엔 과하고, 큰 팀·긴 수명일수록 값을 한다." },
+  ]}
+/>
