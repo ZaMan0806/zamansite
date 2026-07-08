@@ -1,0 +1,231 @@
+export const metadata = {
+  title: "AOP와 Dynamic Proxy — @Transactional·@Cacheable의 비밀",
+  date: "2026-07-08",
+  description:
+    "메서드에 @Transactional 하나 붙였을 뿐인데 앞뒤로 트랜잭션이 열리고 닫힌다. 내 코드엔 그런 로직이 한 줄도 없는데. 그 비밀은 스프링이 내 객체를 몰래 '프록시'로 바꿔치기하기 때문이다. AOP와 다이내믹 프록시가 어떻게 부가 기능을 끼워 넣는지 연다",
+  tags: ["백엔드", "Spring", "스프링 내부"],
+};
+
+# AOP와 Dynamic Proxy — @Transactional·@Cacheable의 비밀
+
+메서드 위에 `@Transactional`을 붙이면, 그 메서드가 실행되기 직전에
+트랜잭션이 열리고, 정상 종료되면 커밋, 예외가 나면 롤백된다. 그런데
+이상하다 — **내 메서드 본문엔 트랜잭션을 열고 닫는 코드가 한 줄도 없다.**
+`@Cacheable`도 마찬가지다. 캐시를 확인하고 저장하는 코드는 어디에도
+없는데 캐싱이 된다.
+
+이 "없는데 동작하는" 비밀의 정체가 **AOP**와 그 구현 수단인 **다이내믹
+프록시**다. 핵심 한 줄로 먼저 말하면 이렇다 — **스프링이 내 객체를,
+그것을 감싼 대역(프록시)으로 몰래 바꿔치기해 두었다.**
+
+<Pipeline
+  stages={[
+    { label: "호출자", sub: "orderService.pay()" },
+    { label: "프록시", sub: "트랜잭션 열고" },
+    { label: "원본 객체", sub: "내 실제 코드" },
+    { label: "프록시", sub: "커밋/롤백" },
+  ]}
+/>
+
+<Callout type="info" title="전제: 프록시는 후처리기가 만든다">
+  <p className="m-0">
+    "내 객체가 언제 프록시로 바뀌지?"의 답은{" "}
+    <a href="/wiki/bean-post-processor">BeanPostProcessor</a>에 있다.
+    빈 생성 마지막의 후처리 단계에서 교체가 일어난다. 그 배경이 궁금하면
+    먼저 보고 오면 좋다.
+  </p>
+</Callout>
+
+---
+
+## 1. AOP — 흩어지는 공통 관심사를 한데 모으기
+
+AOP(Aspect-Oriented Programming, 관점 지향 프로그래밍)는 거창해 보이지만,
+푸는 문제는 아주 구체적이다. **트랜잭션·로깅·캐시·권한 검사 같은 부가
+기능은 수많은 메서드에 똑같이 반복된다.**
+
+<Steps
+  steps={[
+    {
+      title: "문제 — 부가 코드가 본문을 오염시킨다",
+      desc: "메서드마다 '트랜잭션 열기 → 진짜 로직 → 커밋/롤백'을 손으로 쓰면 중복투성이가 된다.",
+      detail: (
+        <p className="m-0">
+          비즈니스 로직(결제 계산)과 부가 관심사(트랜잭션 관리)가 한 메서드에
+          뒤섞인다. 부가 코드를 고치려면 수백 개 메서드를 다 손봐야 한다.
+        </p>
+      ),
+    },
+    {
+      title: "해법 — 부가 기능을 따로 떼어 '주변에 두른다'",
+      desc: "본문은 순수 로직만 남기고, 공통 관심사는 밖에서 감싸도록 분리한다.",
+      detail: (
+        <p className="m-0">
+          "이런 메서드들의 <strong>앞뒤에</strong> 트랜잭션을 두른다"를 한 곳에
+          선언해 두면, 각 메서드는 그 존재를 몰라도 된다. 이 '두르는 코드'가
+          바로 관점(Aspect)이다.
+        </p>
+      ),
+    },
+  ]}
+/>
+
+<Aside term="용어 정리">
+  <strong>Advice</strong>: 실제로 끼워 넣을 부가 동작(트랜잭션 열기 등).{" "}
+  <strong>Pointcut</strong>: 그 동작을 어디에 적용할지(어떤 메서드에).{" "}
+  <strong>Aspect</strong>: 이 둘을 묶은 단위. — 다 외울 필요는 없고,
+  "무엇을(Advice) 어디에(Pointcut) 두른다" 정도면 충분하다.
+</Aside>
+
+그럼 스프링은 이 "앞뒤로 두르기"를 **기술적으로 어떻게** 실현할까? 여기서
+프록시가 등장한다.
+
+---
+
+## 2. 프록시 — 원본을 감싼 대역
+
+프록시(proxy)는 "대리인"이다. 호출자와 원본 객체 사이에 끼어들어, 같은
+인터페이스로 요청을 받은 뒤 **앞뒤에 부가 동작을 끼우고** 원본에게
+넘긴다.
+
+```java
+// 스프링이 대략 이런 프록시를 자동 생성한다 (개념 코드)
+class OrderServiceProxy extends OrderService {
+    OrderService target;         // 내 진짜 객체
+    TransactionManager txManager;
+
+    @Override
+    public void pay() {
+        txManager.begin();       // ← 부가 기능 (앞)
+        try {
+            target.pay();        // ← 내 실제 코드 호출
+            txManager.commit();  // ← 부가 기능 (뒤: 성공 시 커밋)
+        } catch (Exception e) {
+            txManager.rollback();// ← 부가 기능 (뒤: 실패 시 롤백)
+            throw e;
+        }
+    }
+}
+```
+
+내 `pay()` 본문엔 트랜잭션 코드가 없는데도 동작하는 이유가 이제 보인다.
+**컨테이너에 등록된 건 내 원본이 아니라, 이렇게 감싼 프록시**이기
+때문이다. 다른 빈이 `OrderService`를 주입받으면 실제론 이 프록시를 받는다.
+
+<Sequence
+  left="호출자"
+  right="프록시 → 원본"
+  messages={[
+    { from: "left", label: "orderService.pay()", note: "호출자는 프록시를 원본으로 안다" },
+    { from: "right", label: "txManager.begin()", note: "프록시가 트랜잭션을 연다" },
+    { from: "right", label: "target.pay() 실행", note: "그제야 내 실제 코드 호출" },
+    { from: "right", label: "commit / rollback", note: "결과에 따라 커밋 또는 롤백" },
+    { from: "left", label: "정상 반환", note: "호출자는 이 모든 걸 모른다" },
+  ]}
+/>
+
+---
+
+## 3. 프록시를 만드는 두 방식 — JDK vs CGLIB
+
+스프링이 이 프록시 객체를 실제로 찍어내는 방법은 두 가지다. 대상이
+인터페이스를 구현했느냐에 따라 갈린다.
+
+<Compare
+  items={[
+    {
+      title: "JDK 동적 프록시",
+      points: [
+        "대상이 인터페이스를 구현했을 때 사용",
+        "그 인터페이스를 구현한 프록시를 런타임 생성",
+        "자바 표준(java.lang.reflect.Proxy) 기반",
+        "인터페이스 타입으로만 주입받아야 함",
+      ],
+    },
+    {
+      title: "CGLIB 프록시",
+      points: [
+        "인터페이스가 없을 때(구체 클래스) 사용",
+        "대상 클래스를 상속한 자식 프록시를 생성",
+        "스프링 부트의 기본값 (구체 클래스도 커버)",
+        "final 클래스·final 메서드는 감쌀 수 없음",
+      ],
+    },
+  ]}
+/>
+
+<Callout type="tip" title="스프링 부트는 기본이 CGLIB">
+  <p className="m-0">
+    요즘 스프링 부트는 인터페이스 유무와 상관없이 <strong>CGLIB</strong>를
+    기본으로 쓴다(구체 클래스 상속 방식). 그래서 인터페이스 없이
+    <code>@Service</code> 클래스 하나만 있어도 AOP가 잘 걸린다. 대신{" "}
+    <code>final</code>이 붙은 메서드/클래스는 상속·오버라이드가 불가능해{" "}
+    <strong>프록시가 안 걸린다</strong>는 함정이 있다.
+  </p>
+</Callout>
+
+---
+
+## 4. 이 원리를 알면 피하는 함정 — 자기 호출
+
+프록시 방식의 가장 유명한 함정이 하나 있다. **같은 클래스 안에서 자기
+메서드를 호출하면 AOP가 안 걸린다.**
+
+```java
+@Service
+class OrderService {
+    public void process() {
+        this.pay();   // ← @Transactional이 안 걸린다!
+    }
+
+    @Transactional
+    public void pay() { ... }
+}
+```
+
+<Steps
+  steps={[
+    {
+      title: "왜 안 걸리나",
+      desc: "AOP는 '프록시를 거쳐 들어올 때'만 부가 기능을 끼운다.",
+      detail: (
+        <p className="m-0">
+          <code>process()</code> 안의 <code>this.pay()</code>는 프록시가 아니라{" "}
+          <strong>원본 객체 자신</strong>을 직접 부른다. 프록시를 우회했으니
+          트랜잭션을 두르는 코드도 건너뛴다.
+        </p>
+      ),
+    },
+    {
+      title: "어떻게 푸나",
+      desc: "메서드를 다른 빈으로 분리하거나, 프록시를 거치도록 구조를 바꾼다.",
+      detail: (
+        <p className="m-0">
+          <code>pay()</code>를 별도 빈으로 빼서 주입받아 호출하면, 그 호출은
+          프록시를 거치므로 트랜잭션이 정상으로 걸린다. "왜 안 걸리지?"를
+          디버깅할 때 이 원리를 알면 5분 만에 원인을 짚는다.
+        </p>
+      ),
+    },
+  ]}
+/>
+
+정리하면, `@Transactional`·`@Cacheable`의 "마법"은 마법이 아니라 **프록시로
+원본을 감싸 앞뒤에 부가 동작을 끼우는 기법**이다. 컨테이너에서 꺼낸 빈이
+내가 만든 클래스가 아니라 프록시라는 사실 하나만 붙잡으면, 자기 호출
+함정도, final 함정도 전부 같은 원리에서 설명된다.
+
+---
+
+## 한 장 요약
+
+<Steps
+  steps={[
+    { title: "왜", desc: "@Transactional·@Cacheable은 본문에 코드가 없는데 동작한다. 스프링이 원본을 프록시로 바꿔치기했기 때문." },
+    { title: "AOP", desc: "트랜잭션·로깅·캐시 같은 공통 관심사를 본문에서 떼어, 메서드 앞뒤에 '두르는' 방식으로 분리한다." },
+    { title: "프록시", desc: "호출자와 원본 사이의 대역. 요청을 받아 부가 동작(begin/commit)을 끼우고 원본을 호출한다." },
+    { title: "두 방식", desc: "인터페이스 있으면 JDK 동적 프록시, 없으면 CGLIB(상속). 부트 기본은 CGLIB." },
+    { title: "언제 교체되나", desc: "빈 생성의 마지막 후처리 단계(postProcessAfterInitialization)에서 프록시로 교체된다." },
+    { title: "함정", desc: "같은 클래스 내 this.자기호출은 프록시를 우회해 AOP가 안 걸린다. final도 CGLIB가 못 감싼다." },
+  ]}
+/>

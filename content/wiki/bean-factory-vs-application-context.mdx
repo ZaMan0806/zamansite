@@ -1,0 +1,244 @@
+export const metadata = {
+  title: "BeanFactory vs ApplicationContext — 스프링 컨테이너의 두 얼굴",
+  date: "2026-07-08",
+  description:
+    "스프링은 객체를 대신 만들고 관리해 주는 '컨테이너'다. 그 컨테이너의 가장 밑바닥 인터페이스가 BeanFactory이고, 실무에서 실제로 쓰는 건 그 위에 편의 기능을 잔뜩 얹은 ApplicationContext다. 둘의 관계와 차이를 밑바닥부터 짚는다",
+  tags: ["백엔드", "Spring", "스프링 내부"],
+};
+
+# BeanFactory vs ApplicationContext — 스프링 컨테이너의 두 얼굴
+
+스프링을 쓰면 `new`로 객체를 직접 만들 일이 확 줄어든다. `@Component`나
+`@Bean`을 붙여 두면, 그 객체를 스프링이 대신 만들어 두고, 필요한 곳에
+꽂아 준다. 이렇게 **객체의 생성·보관·연결을 대신 맡아 주는 존재**를
+스프링에선 컨테이너(container)라고 부른다. 컨테이너가 관리하는 객체 하나
+하나를 **빈(Bean)** 이라 한다.
+
+그런데 이 "컨테이너"는 사실 하나가 아니다. 가장 밑바닥에 `BeanFactory`라는
+최소 기능의 인터페이스가 있고, 그 위에 실무에서 쓰는 기능을 잔뜩 얹은
+`ApplicationContext`가 있다. 스프링 부트를 쓰면 우리는 늘 후자를 쓰지만,
+**둘의 관계를 알아 두면 컨테이너가 실제로 무슨 일을 하는지**가 또렷해진다.
+
+<Pipeline
+  stages={[
+    { label: "BeanFactory", sub: "최소 컨테이너" },
+    { label: "ApplicationContext", sub: "+ 편의 기능" },
+    { label: "우리가 쓰는 것", sub: "부트 자동 구성" },
+  ]}
+/>
+
+<Callout type="info" title="한 줄로 먼저">
+  <p className="m-0">
+    <strong>BeanFactory</strong>는 "빈을 만들고 꺼내 주는" 가장 기본적인
+    계약이고, <strong>ApplicationContext</strong>는 그 계약을 상속해서{" "}
+    이벤트·국제화·리소스 로딩·자동 후처리 같은 <strong>엔터프라이즈 편의
+    기능</strong>을 덧붙인 상위 인터페이스다. 실무에서 만지는 컨테이너는
+    거의 항상 ApplicationContext다.
+  </p>
+</Callout>
+
+---
+
+## 1. 컨테이너가 애초에 왜 필요한가
+
+컨테이너를 이해하려면 먼저 **컨테이너가 없을 때 뭐가 불편한지**를 봐야 한다.
+객체를 직접 `new`로 만들면, 그 객체가 필요로 하는 다른 객체들도 내가 다
+만들어서 넘겨줘야 한다.
+
+<Steps
+  steps={[
+    {
+      title: "직접 만들면 의존성이 줄줄이 딸려온다",
+      desc: "OrderService 하나 쓰려는데 그 안이 다 얽혀 있다.",
+      detail: (
+        <p className="m-0">
+          <code>new OrderService(new PaymentClient(new HttpConfig(...)))</code>{" "}
+          처럼, 하나를 만들려고 그 아래 의존성을 전부 내 손으로 조립해야 한다.
+          객체 관계가 바뀌면 이 조립 코드를 전부 고쳐야 한다.
+        </p>
+      ),
+    },
+    {
+      title: "그래서 조립을 남에게 맡긴다 — 제어의 역전(IoC)",
+      desc: "내가 만드는 대신, 컨테이너가 만들어서 넘겨주게 한다.",
+      detail: (
+        <p className="m-0">
+          객체를 만들고 서로 연결하는 <strong>주도권을 컨테이너에 넘기는</strong>{" "}
+          것이 제어의 역전(Inversion of Control)이다. 그중 "필요한 걸 대신 꽂아
+          주는" 방식이 의존성 주입(Dependency Injection)이다.
+        </p>
+      ),
+    },
+    {
+      title: "컨테이너는 '무엇을 만들지'의 목록을 들고 있다",
+      desc: "각 빈의 설계도(BeanDefinition)를 모아 관리한다.",
+      detail: (
+        <p className="m-0">
+          컨테이너는 클래스·스코프·의존관계 같은 정보를 담은{" "}
+          <strong>BeanDefinition</strong>을 먼저 모으고, 요청이 오면 그
+          설계도대로 실제 객체를 찍어낸다. 이 과정은{" "}
+          <a href="/wiki/bean-lifecycle">Bean 생성 과정</a> 글에서 깊게 다룬다.
+        </p>
+      ),
+    },
+  ]}
+/>
+
+즉 컨테이너의 본질은 **"객체의 설계도를 모아 두었다가, 요청하면 조립해서
+꺼내 주는 공장"** 이다. 이 공장의 가장 뼈대만 추린 인터페이스가 바로
+`BeanFactory`다.
+
+---
+
+## 2. BeanFactory — 컨테이너의 최소 계약
+
+`BeanFactory`는 이름 그대로 "빈을 만드는 공장"의 최소 인터페이스다. 핵심
+메서드는 사실상 하나로 요약된다: **"이름(또는 타입)을 주면 빈을 돌려줘라."**
+
+```java
+public interface BeanFactory {
+    Object getBean(String name);
+    <T> T getBean(Class<T> requiredType);
+    boolean containsBean(String name);
+    boolean isSingleton(String name);
+    // ...
+}
+```
+
+<Aside term="지연 로딩">
+  전통적인 순수 BeanFactory는 <code>getBean()</code>으로 처음 요청받는
+  순간에야 빈을 만드는 <strong>지연(lazy) 초기화</strong>가 기본이다. 이건
+  뒤에서 ApplicationContext와 갈리는 중요한 지점이 된다.
+</Aside>
+
+BeanFactory가 제공하는 건 딱 이 정도다. 빈을 등록하고, 이름으로 찾고,
+싱글턴인지 확인하는 것. **DI 컨테이너로서 최소한으로 필요한 기능**만 있다.
+그래서 가볍지만, 실무에서 쓰기엔 빠진 게 많다. 이벤트를 뿌리는 기능도,
+설정 파일을 읽어 리소스로 다루는 기능도, 다국어 메시지 처리도 없다.
+
+<Callout type="warn" title="순수 BeanFactory를 직접 쓸 일은 거의 없다">
+  <p className="m-0">
+    BeanFactory는 "컨테이너란 최소한 이런 것"을 정의하는{" "}
+    <strong>개념적 바닥</strong>에 가깝다. 우리가 코드에서 직접{" "}
+    <code>new DefaultListableBeanFactory()</code>를 하는 경우는 프레임워크
+    내부거나 아주 특수한 상황뿐이다.
+  </p>
+</Callout>
+
+---
+
+## 3. ApplicationContext — 그 위에 얹은 실무용 확장
+
+`ApplicationContext`는 `BeanFactory`를 **상속**한다. 즉
+ApplicationContext는 BeanFactory가 할 수 있는 모든 것(`getBean` 등)을 그대로
+할 수 있고, 그 위에 실무에 필요한 기능을 덧붙인 것이다.
+
+<Compare
+  items={[
+    {
+      title: "BeanFactory (바닥)",
+      points: [
+        "getBean으로 빈 조회 — DI의 최소 기능",
+        "싱글턴/프로토타입 스코프 관리",
+        "기본은 지연 초기화 (요청 시 생성)",
+        "이벤트·리소스·국제화 기능 없음",
+        "후처리기를 수동으로 등록해야 함",
+      ],
+    },
+    {
+      title: "ApplicationContext (실무)",
+      points: [
+        "BeanFactory 기능 전부 포함 (상속)",
+        "이벤트 발행/구독 (ApplicationEvent)",
+        "메시지 소스로 국제화(i18n) 지원",
+        "리소스 로딩(classpath:, file: 등) 통합",
+        "BeanPostProcessor·환경설정 자동 등록",
+        "기본은 즉시 초기화 (부팅 때 싱글턴 미리 생성)",
+      ],
+    },
+  ]}
+/>
+
+가장 실무에 와닿는 차이는 마지막 두 가지다.
+
+**첫째, 후처리기 자동 등록.** `@Autowired`나 `@Transactional` 같은
+애노테이션은 저절로 동작하는 게 아니라, 그걸 처리하는 **후처리기
+(BeanPostProcessor)** 가 컨테이너에 등록돼 있어야 한다. ApplicationContext는
+이걸 알아서 등록해 준다. 순수 BeanFactory였다면 손으로 꽂아야 한다. (후처리기가
+정확히 무슨 일을 하는지는{" "}
+<a href="/wiki/bean-post-processor">BeanPostProcessor</a> 글에서 다룬다.)
+
+**둘째, 즉시 초기화.** ApplicationContext는 부팅할 때 싱글턴 빈들을 미리 다
+만들어 둔다. 그래서 설정 오류가 있으면 **첫 요청이 아니라 시작 시점에**
+바로 터진다 — 문제를 일찍 발견할 수 있다는 뜻이다.
+
+<Sequence
+  left="애플리케이션 시작"
+  right="ApplicationContext"
+  messages={[
+    { from: "left", label: "context.refresh()", note: "컨테이너 부팅 시작" },
+    { from: "right", label: "BeanDefinition 스캔·등록", note: "무엇을 만들지 목록화" },
+    { from: "right", label: "BeanPostProcessor 등록", note: "@Autowired 등 처리기 준비" },
+    { from: "right", label: "싱글턴 빈 즉시 생성", note: "부팅 때 미리 다 만들어 둠" },
+    { from: "left", label: "getBean(OrderService)", note: "이미 만들어진 걸 바로 반환" },
+  ]}
+/>
+
+<Callout type="tip" title="상속 관계로 기억하면 쉽다">
+  <p className="m-0">
+    <code>ApplicationContext extends BeanFactory</code>. 그래서 "모든
+    ApplicationContext는 BeanFactory지만, 그 반대는 아니다." BeanFactory는
+    최소한의 DI, ApplicationContext는 거기에 <strong>엔터프라이즈 편의</strong>를
+    더한 확장판이라고 보면 된다.
+  </p>
+</Callout>
+
+---
+
+## 4. 스프링 부트에서 우리가 실제로 만나는 것
+
+스프링 부트로 앱을 띄우면, 내부적으로 `ApplicationContext`의 구현체 중
+하나가 생성된다. 웹 앱이면 보통 `AnnotationConfigServletWebServerApplicationContext`
+같은 긴 이름의 구현체다. 우리는 그 존재를 거의 의식하지 못하지만, 매번 그
+컨테이너를 쓰고 있는 셈이다.
+
+<Steps
+  steps={[
+    {
+      title: "SpringApplication.run()이 컨테이너를 만든다",
+      desc: "부트가 환경에 맞는 ApplicationContext 구현체를 고른다.",
+    },
+    {
+      title: "컴포넌트 스캔으로 빈 목록을 채운다",
+      desc: "@Component·@Service·@Controller 등을 찾아 BeanDefinition으로 등록한다.",
+    },
+    {
+      title: "refresh()로 컨테이너를 가동한다",
+      desc: "후처리기 등록 → 싱글턴 즉시 생성 → 이벤트 발행까지 이 안에서 벌어진다.",
+    },
+    {
+      title: "요청이 오면 이미 조립된 빈이 동작한다",
+      desc: "우리가 짠 @Controller·@Service는 컨테이너가 만들어 둔 인스턴스다.",
+    },
+  ]}
+/>
+
+정리하면, **BeanFactory는 "컨테이너란 무엇인가"의 정의**이고,
+**ApplicationContext는 "실무에서 쓸 만한 컨테이너"의 실체**다. 스프링 부트를
+쓴다면 사실상 늘 ApplicationContext를 쓰고 있는 것이고, BeanFactory는 그
+아래에서 조용히 DI의 기반을 떠받치고 있다.
+
+---
+
+## 한 장 요약
+
+<Steps
+  steps={[
+    { title: "컨테이너란", desc: "객체(빈)의 생성·보관·연결을 대신 맡아 주는 존재. 그 핵심 아이디어가 제어의 역전(IoC)·의존성 주입(DI)." },
+    { title: "BeanFactory", desc: "컨테이너의 최소 계약. getBean으로 빈을 만들고 꺼내 주는 뼈대. 기본은 지연 초기화." },
+    { title: "ApplicationContext", desc: "BeanFactory를 상속해 이벤트·국제화·리소스·후처리기 자동 등록을 더한 실무용 확장. 기본은 즉시 초기화." },
+    { title: "핵심 차이", desc: "후처리기 자동 등록으로 @Autowired 등이 저절로 동작하고, 싱글턴을 부팅 때 미리 만들어 오류를 일찍 잡는다." },
+    { title: "우리가 쓰는 것", desc: "스프링 부트는 내부적으로 ApplicationContext 구현체를 띄운다. BeanFactory는 그 아래 DI 기반으로 존재." },
+    { title: "다음 글", desc: "그 컨테이너가 빈 하나를 실제로 어떻게 찍어내는지 — BeanDefinition → 생성 → 초기화 → 후처리 과정으로 이어진다." },
+  ]}
+/>

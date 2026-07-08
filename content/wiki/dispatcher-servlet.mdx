@@ -1,0 +1,227 @@
+export const metadata = {
+  title: "DispatcherServlet — HTTP 요청이 Controller까지 가는 길",
+  date: "2026-07-08",
+  description:
+    "브라우저가 GET /orders/42를 보내면, 그게 어떻게 내 @GetMapping 메서드까지 도달할까. 그 사이엔 DispatcherServlet이라는 '중앙 교통정리원'이 있다. 요청을 받아 어느 컨트롤러로 보낼지 찾고, 인자를 만들어 넣고, 결과를 응답으로 바꾸는 전 과정을 연다",
+  tags: ["백엔드", "Spring", "스프링 내부"],
+};
+
+# DispatcherServlet — HTTP 요청이 Controller까지 가는 길
+
+`@GetMapping("/orders/{id}")`를 붙인 메서드를 하나 만들어 두면, 브라우저가
+`GET /orders/42`를 보냈을 때 그 메서드가 실행된다. 심지어 `42`가
+파라미터로 알아서 들어와 있다. 이 사이에서 도대체 무슨 일이 벌어지는가.
+
+그 한가운데에 **DispatcherServlet**이 있다. 스프링 MVC의 심장이자, 들어오는
+모든 HTTP 요청을 받아 **"이건 어느 컨트롤러가 처리할 일이야"** 를 판단해
+넘기는 중앙 교통정리원이다. 이 글은 요청 하나가 이 관문을 통과해 내
+컨트롤러 메서드에 닿고, 다시 응답이 되어 나가는 전 과정을 연다.
+
+<Pipeline
+  stages={[
+    { label: "요청 수신", sub: "DispatcherServlet" },
+    { label: "핸들러 찾기", sub: "HandlerMapping" },
+    { label: "메서드 실행", sub: "HandlerAdapter" },
+    { label: "응답 변환", sub: "ViewResolver / 메시지 컨버터" },
+  ]}
+/>
+
+<Callout type="info" title="Front Controller 패턴">
+  <p className="m-0">
+    DispatcherServlet은 <strong>모든 요청이 먼저 거치는 단일 입구</strong>다.
+    이렇게 앞단에 하나의 관문을 두고 뒤로 분배하는 구조를{" "}
+    <strong>프론트 컨트롤러 패턴</strong>이라 부른다. 공통 처리(로깅·인증
+    등)를 한 곳에 모을 수 있다는 게 핵심 이점이다.
+  </p>
+</Callout>
+
+---
+
+## 1. 요청이 DispatcherServlet에 닿기까지
+
+브라우저의 요청은 곧장 DispatcherServlet으로 오는 게 아니다. 그 앞에
+웹 서버(서블릿 컨테이너, 예: 톰캣)가 있다.
+
+<Steps
+  steps={[
+    {
+      title: "톰캣이 HTTP 요청을 받는다",
+      desc: "TCP로 들어온 바이트를 HttpServletRequest 객체로 파싱한다.",
+      detail: (
+        <p className="m-0">
+          스프링이 뜰 때 내장 톰캣이 함께 뜬다. 톰캣은 순수하게 "HTTP를
+          자바 객체로 바꿔 서블릿에 넘기는" 역할을 한다.
+        </p>
+      ),
+    },
+    {
+      title: "모든 경로를 DispatcherServlet에 매핑",
+      desc: "보통 '/' 아래 전부를 이 하나의 서블릿이 받도록 등록돼 있다.",
+      detail: (
+        <p className="m-0">
+          그래서 <code>/orders</code>든 <code>/users</code>든 전부 일단
+          DispatcherServlet으로 모인다. 여기서부터 스프링 MVC의 영역이다.
+        </p>
+      ),
+    },
+  ]}
+/>
+
+<Aside term="서블릿이 뭔데">
+  서블릿은 "HTTP 요청을 받아 응답을 만드는 자바 표준 객체"다.
+  DispatcherServlet도 결국 하나의 서블릿이다 — 다만 직접 응답을 만들지
+  않고, <strong>적절한 컨트롤러에게 위임</strong>하는 특별한 서블릿이다.
+</Aside>
+
+---
+
+## 2. 핵심 5단계 — 요청에서 응답까지
+
+DispatcherServlet이 요청을 받은 뒤 벌어지는 일은 다섯 단계로 요약된다.
+이 순서가 스프링 MVC의 뼈대다.
+
+<Sequence
+  left="DispatcherServlet"
+  right="MVC 협력 객체들"
+  messages={[
+    { from: "left", label: "① 핸들러 조회", note: "HandlerMapping: URL로 컨트롤러 메서드 찾기" },
+    { from: "right", label: "핸들러 + 인터셉터 반환", note: "'이 요청은 OrderController.get()이야'" },
+    { from: "left", label: "② 어댑터로 실행 위임", note: "HandlerAdapter: 인자 바인딩 후 메서드 호출" },
+    { from: "right", label: "③ 반환값 전달", note: "객체(@RestController) 또는 뷰 이름" },
+    { from: "left", label: "④ 응답 변환", note: "메시지 컨버터(JSON) 또는 ViewResolver(HTML)" },
+    { from: "right", label: "⑤ HTTP 응답 완성", note: "상태코드·헤더·바디를 채워 반환" },
+  ]}
+/>
+
+각 단계를 조금 더 풀어 보자.
+
+<Steps
+  steps={[
+    {
+      title: "① HandlerMapping — 누가 처리할지 찾기",
+      desc: "요청 URL·메서드(GET/POST)를 보고 담당 컨트롤러 메서드를 찾는다.",
+      detail: (
+        <p className="m-0">
+          <code>@RequestMapping</code>·<code>@GetMapping</code> 정보를 부팅 때
+          미리 색인해 두고, 들어온 요청과 매칭한다. 여기서 매칭 실패하면
+          곧 404다.
+        </p>
+      ),
+    },
+    {
+      title: "② HandlerAdapter — 메서드를 실제로 부르기",
+      desc: "찾은 메서드를 호출하되, 그 전에 파라미터를 만들어 넣는다.",
+      detail: (
+        <p className="m-0">
+          <code>{"@PathVariable Long id"}</code>에 URL의 <code>42</code>를,{" "}
+          <code>@RequestBody</code>에 JSON 본문을 변환해 채운다. 이 "인자
+          만들어 넣기"를 담당하는 게 <strong>ArgumentResolver</strong>들이다.
+        </p>
+      ),
+    },
+    {
+      title: "③ 컨트롤러 실행 — 내 코드가 도는 지점",
+      desc: "드디어 내가 짠 @GetMapping 메서드 본문이 실행된다.",
+      detail: (
+        <p className="m-0">
+          여기서 반환하는 값이 무엇이냐에 따라 다음 단계가 갈린다. 객체를
+          반환하면 JSON으로, 문자열(뷰 이름)을 반환하면 HTML 렌더링으로.
+        </p>
+      ),
+    },
+    {
+      title: "④ 응답으로 변환 — 두 갈래",
+      desc: "@RestController면 메시지 컨버터가 JSON으로, 전통 MVC면 ViewResolver가 뷰를 찾는다.",
+      detail: (
+        <p className="m-0">
+          <code>@ResponseBody</code>/<code>@RestController</code>는{" "}
+          <strong>HttpMessageConverter</strong>가 객체를 JSON 문자열로 직렬화한다.
+          반면 뷰 이름을 반환하면 <strong>ViewResolver</strong>가 그에 맞는
+          템플릿(예: Thymeleaf)을 찾아 HTML을 그린다.
+        </p>
+      ),
+    },
+    {
+      title: "⑤ HTTP 응답 완성",
+      desc: "상태코드·헤더·바디를 채운 응답이 톰캣을 거쳐 브라우저로 돌아간다.",
+    },
+  ]}
+/>
+
+---
+
+## 3. 왜 이렇게 여러 조각으로 나눴나
+
+`HandlerMapping`, `HandlerAdapter`, `ViewResolver`, `MessageConverter`…
+이름이 많다. 하지만 이렇게 쪼갠 데는 이유가 있다 — **각 단계를 독립적으로
+교체·확장**할 수 있게 하려는 것이다.
+
+<Compare
+  items={[
+    {
+      title: "DispatcherServlet이 직접 다 하면",
+      points: [
+        "URL 매칭·인자 바인딩·직렬화가 한 덩어리",
+        "JSON 대신 XML을 쓰려면 본체를 수정",
+        "새 컨트롤러 방식 추가가 어렵다",
+        "테스트·확장이 경직된다",
+      ],
+    },
+    {
+      title: "조각으로 나눴기에",
+      points: [
+        "각 단계가 인터페이스로 분리됨",
+        "메시지 컨버터만 갈면 응답 형식 교체",
+        "ArgumentResolver 추가로 커스텀 파라미터",
+        "DispatcherServlet은 '조율'만 담당",
+      ],
+    },
+  ]}
+/>
+
+<Callout type="tip" title="DispatcherServlet은 지휘자다">
+  <p className="m-0">
+    DispatcherServlet 자신은 URL 매칭도, JSON 변환도 직접 하지 않는다.
+    그저 <strong>"핸들러 찾아 → 실행시켜 → 응답으로 바꿔"</strong>라고
+    각 전문 조각에게 순서대로 시킬 뿐이다. 오케스트라의 지휘자처럼,
+    연주는 각 파트가 하고 지휘자는 흐름만 통제한다.
+  </p>
+</Callout>
+
+---
+
+## 4. 컨테이너와의 연결
+
+한 가지 짚어 둘 것. DispatcherServlet이 찾아 실행하는 컨트롤러들은
+**전부 스프링 컨테이너가 만들어 둔 빈**이다. `@RestController`도 결국
+`@Component`의 일종이라, 부팅 때 컨테이너에 등록된다.
+
+<Steps
+  steps={[
+    { title: "부팅", desc: "컨테이너가 @Controller·@RestController를 빈으로 만든다." },
+    { title: "색인", desc: "HandlerMapping이 그 빈들의 @RequestMapping을 훑어 URL↔메서드 표를 만든다." },
+    { title: "런타임", desc: "요청이 오면 그 표에서 담당 빈의 메서드를 찾아 호출한다." },
+    { title: "AOP도 여기서", desc: "컨트롤러·서비스가 @Transactional 프록시라면, 실행은 프록시를 거친다." },
+  ]}
+/>
+
+즉 "HTTP 요청 → 컨트롤러"의 길은 **웹 계층(DispatcherServlet)** 과
+**컨테이너(빈으로 만들어진 컨트롤러)** 가 맞물려 완성된다. 컨트롤러가
+어떻게 빈이 되는지는 <a href="/wiki/bean-lifecycle">Bean 생성 과정</a>,
+그 컨트롤러/서비스에 트랜잭션이 어떻게 걸리는지는{" "}
+<a href="/wiki/aop-dynamic-proxy">AOP와 Dynamic Proxy</a>로 이어진다.
+
+---
+
+## 한 장 요약
+
+<Steps
+  steps={[
+    { title: "정체", desc: "모든 HTTP 요청이 먼저 거치는 단일 입구(프론트 컨트롤러). 스프링 MVC의 중앙 교통정리원." },
+    { title: "① HandlerMapping", desc: "URL·HTTP 메서드로 담당 컨트롤러 메서드를 찾는다. 실패하면 404." },
+    { title: "② HandlerAdapter", desc: "찾은 메서드를 호출하되 @PathVariable·@RequestBody 등 인자를 만들어 채운다." },
+    { title: "③ 컨트롤러 실행", desc: "내 @GetMapping 본문이 도는 지점. 반환값 종류가 다음 단계를 가른다." },
+    { title: "④ 응답 변환", desc: "객체 → JSON(MessageConverter) 또는 뷰 이름 → HTML(ViewResolver)." },
+    { title: "설계 의도", desc: "각 단계를 인터페이스로 쪼개 교체·확장 가능하게. DispatcherServlet은 조율만 한다." },
+  ]}
+/>

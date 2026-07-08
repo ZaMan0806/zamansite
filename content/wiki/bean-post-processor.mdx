@@ -1,0 +1,212 @@
+export const metadata = {
+  title: "BeanPostProcessor — 애노테이션이 실제 동작으로 바뀌는 곳",
+  date: "2026-07-08",
+  description:
+    "@Autowired를 붙이면 값이 채워지고, @EventListener를 붙이면 이벤트를 받고, @Transactional을 붙이면 트랜잭션이 걸린다. 이 '붙이면 저절로'의 정체가 바로 BeanPostProcessor다. 빈 생성 파이프라인에 끼어들어 애노테이션을 해석하는 확장 지점을 연다",
+  tags: ["백엔드", "Spring", "스프링 내부"],
+};
+
+# BeanPostProcessor — 애노테이션이 실제 동작으로 바뀌는 곳
+
+스프링에서 `@Autowired`를 붙이면 의존성이 채워지고, `@EventListener`를
+붙이면 이벤트를 받고, `@Transactional`을 붙이면 트랜잭션이 걸린다. 우리는
+이 "붙이면 저절로"에 너무 익숙해서, 그게 **누가 해 주는 일인지**는 잘
+생각하지 않는다.
+
+답은 하나로 모인다: **BeanPostProcessor.** 빈이 만들어지는 파이프라인
+중간에 끼어들어, 애노테이션을 읽고 실제 동작으로 바꿔 주는 확장 지점이다.
+스프링의 "마법"이라 부르는 것들의 상당수가 여기서 벌어진다.
+
+<Pipeline
+  stages={[
+    { label: "빈 생성", sub: "인스턴스화·주입" },
+    { label: "Before 후처리", sub: "@PostConstruct 등" },
+    { label: "초기화", sub: "init 콜백" },
+    { label: "After 후처리", sub: "AOP 프록시" },
+  ]}
+/>
+
+<Callout type="info" title="전제: 생성 과정을 먼저 보면 좋다">
+  <p className="m-0">
+    BeanPostProcessor는 빈 생성 파이프라인의 한 지점에 끼어드는 장치다.
+    그 파이프라인 전체가 궁금하다면{" "}
+    <a href="/wiki/bean-lifecycle">Bean 생성 과정</a> 글을 먼저 보고 오면
+    이 글이 훨씬 선명해진다.
+  </p>
+</Callout>
+
+---
+
+## 1. BeanPostProcessor란 무엇인가
+
+이름을 그대로 풀면 "빈(Bean)을 후처리(PostProcess)하는 것"이다.
+인터페이스 자체는 놀랄 만큼 단순하다. 메서드가 딱 두 개다.
+
+```java
+public interface BeanPostProcessor {
+    // 초기화(@PostConstruct 등) '전'에 각 빈마다 호출
+    Object postProcessBeforeInitialization(Object bean, String beanName);
+
+    // 초기화 '후'에 각 빈마다 호출
+    Object postProcessAfterInitialization(Object bean, String beanName);
+}
+```
+
+핵심은 이 두 메서드가 **컨테이너가 만드는 모든 빈 하나하나에 대해**
+호출된다는 점이다. 그리고 결정적으로, **반환값이 다시 그 빈으로 쓰인다.**
+즉 후처리기는 빈을 들여다보기만 하는 게 아니라, **다른 객체로 바꿔치기할
+수도 있다.**
+
+<Callout type="deep" title="반환값을 바꿀 수 있다 = 프록시로 교체할 수 있다">
+  <p className="m-0">
+    <code>postProcessAfterInitialization</code>이 원본 대신{" "}
+    <strong>프록시 객체</strong>를 반환하면, 컨테이너에는 그 프록시가
+    등록된다. <code>@Transactional</code>·<code>@Cacheable</code>이
+    동작하는 원리가 정확히 이것이다 —{" "}
+    <a href="/wiki/aop-dynamic-proxy">AOP와 Dynamic Proxy</a> 글 참고.
+  </p>
+</Callout>
+
+---
+
+## 2. 파이프라인의 어디에 끼어드나
+
+빈 생성 순서 위에 후처리기를 겹쳐 보면, 정확히 어느 틈에 개입하는지가
+보인다.
+
+<Sequence
+  left="컨테이너"
+  right="만들어지는 빈"
+  messages={[
+    { from: "left", label: "인스턴스화 + 의존성 주입", note: "생성자 호출, @Autowired 채우기" },
+    { from: "left", label: "postProcessBeforeInitialization", note: "각 후처리기가 초기화 전에 개입" },
+    { from: "right", label: "@PostConstruct 실행", note: "초기화 콜백" },
+    { from: "left", label: "postProcessAfterInitialization", note: "여기서 프록시로 교체 가능" },
+    { from: "right", label: "완성된 빈 반환", note: "원본 또는 프록시가 컨테이너에 등록" },
+  ]}
+/>
+
+여기서 재밌는 사실. **`@Autowired`를 채우는 것도, `@EventListener`를 등록하는
+것도 각각 별개의 후처리기가 한다.** 스프링은 우리가 아는 애노테이션 기능들을
+대부분 "내장 BeanPostProcessor"로 구현해 두었다.
+
+<Compare
+  items={[
+    {
+      title: "우리가 보는 애노테이션",
+      points: [
+        "@Autowired / @Value 로 주입",
+        "@PostConstruct / @PreDestroy 콜백",
+        "@EventListener 로 이벤트 구독",
+        "@Transactional 로 트랜잭션",
+        "@Async / @Cacheable 등",
+      ],
+    },
+    {
+      title: "실제로 처리하는 후처리기",
+      points: [
+        "AutowiredAnnotationBeanPostProcessor",
+        "CommonAnnotationBeanPostProcessor",
+        "EventListenerMethodProcessor 계열",
+        "AnnotationAwareAspectJAutoProxyCreator (AOP)",
+        "각 기능마다 전담 후처리기가 있다",
+      ],
+    },
+  ]}
+/>
+
+<Aside term="이름은 몰라도 된다">
+  후처리기들의 긴 클래스 이름을 외울 필요는 없다. 중요한 건{" "}
+  <strong>"애노테이션 = 그걸 해석하는 후처리기가 뒤에 있다"</strong>는
+  구조 감각이다.
+</Aside>
+
+---
+
+## 3. 왜 이 구조로 만들었나
+
+스프링이 굳이 이런 확장 지점을 둔 이유는, **애노테이션 기능을 컨테이너
+본체에서 떼어내기** 위해서다. 이게 왜 좋은지 세 가지로 정리된다.
+
+<Steps
+  steps={[
+    {
+      title: "관심사가 분리된다",
+      desc: "컨테이너는 '빈을 만든다'만 하고, '@Autowired를 해석한다'는 별도 후처리기가 맡는다.",
+      detail: (
+        <p className="m-0">
+          컨테이너 코어 코드를 건드리지 않고도, 후처리기를 추가하는 것만으로
+          새로운 애노테이션 기능을 얹을 수 있다.
+        </p>
+      ),
+    },
+    {
+      title: "우리가 직접 만들 수도 있다",
+      desc: "커스텀 애노테이션을 만들고, 그걸 해석하는 후처리기를 등록하면 나만의 '마법'을 만들 수 있다.",
+      detail: (
+        <p className="m-0">
+          예를 들어 <code>@MaskLog</code> 같은 애노테이션을 정의하고,
+          후처리기에서 그게 붙은 빈을 프록시로 감싸 로그를 가리게 할 수 있다.
+          스프링이 하는 일을 똑같이 할 수 있다는 뜻이다.
+        </p>
+      ),
+    },
+    {
+      title: "다른 후처리기보다 먼저 등록된다",
+      desc: "BeanPostProcessor 자신도 빈이지만, 일반 빈보다 먼저 만들어져야 한다.",
+      detail: (
+        <p className="m-0">
+          후처리기가 일반 빈을 처리하려면, 그 일반 빈보다 <strong>먼저</strong>{" "}
+          준비돼야 한다. 그래서 컨테이너는 부팅 초반에 후처리기부터 등록한다.
+          이 순서 보장은 ApplicationContext가 알아서 해 준다.
+        </p>
+      ),
+    },
+  ]}
+/>
+
+<Callout type="tip" title="BeanFactoryPostProcessor와 헷갈리지 말 것">
+  <p className="m-0">
+    이름이 비슷한 <strong>BeanFactoryPostProcessor</strong>는 다른 것이다.
+    이건 <strong>빈이 만들어지기 전, 설계도(BeanDefinition) 단계</strong>에
+    개입한다. 예: <code>@Value</code>의 <code>{"${...}"}</code> 플레이스홀더를
+    실제 값으로 치환하는 일. 요약하면 — <strong>BeanFactoryPostProcessor는
+    설계도를 손보고, BeanPostProcessor는 완성 직전의 객체를 손본다.</strong>
+  </p>
+</Callout>
+
+---
+
+## 4. @EventListener는 어떻게 붙나 (예시)
+
+`@EventListener`를 예로 흐름을 구체화해 보자. 우리는 그저 메서드에
+애노테이션을 붙였을 뿐인데, 그게 어떻게 "이벤트를 받는 리스너"가 되는가.
+
+<Steps
+  steps={[
+    { title: "부팅 시 스캔", desc: "전용 후처리기가 모든 빈의 메서드를 훑어 @EventListener를 찾는다." },
+    { title: "리스너로 등록", desc: "찾은 메서드를 이벤트 종류별로 컨테이너의 이벤트 멀티캐스터에 등록한다." },
+    { title: "이벤트 발행", desc: "누군가 applicationEventPublisher.publishEvent()를 호출하면," },
+    { title: "매칭 호출", desc: "그 이벤트 타입에 맞게 등록해 둔 메서드들이 불린다." },
+  ]}
+/>
+
+즉 `@EventListener`도 결국 **"애노테이션을 스캔해 실제 등록 동작으로
+바꿔 주는 후처리기"** 덕에 동작한다. 앞서 본 `@Autowired`,
+`@Transactional`과 완전히 같은 패턴이다. 애노테이션이 마법처럼 보였던 건,
+그 뒤에서 조용히 도는 후처리기를 못 봤기 때문일 뿐이다.
+
+---
+
+## 한 장 요약
+
+<Steps
+  steps={[
+    { title: "정체", desc: "@Autowired·@EventListener·@Transactional 등 '붙이면 저절로'의 실행 주체. 빈 생성 파이프라인에 끼어드는 확장 지점." },
+    { title: "인터페이스", desc: "postProcessBeforeInitialization / AfterInitialization 두 메서드. 모든 빈마다 호출되고, 반환값이 그 빈이 된다." },
+    { title: "핵심 능력", desc: "반환값을 바꿀 수 있어 원본을 프록시로 교체 가능 — @Transactional·@Cacheable의 토대." },
+    { title: "내장 후처리기", desc: "@Autowired·@PostConstruct·@EventListener·AOP는 각각 전담 내장 후처리기가 처리한다." },
+    { title: "vs BeanFactoryPostProcessor", desc: "후자는 '설계도(BeanDefinition)'를 손보고, BeanPostProcessor는 '완성 직전 객체'를 손본다." },
+    { title: "다음 글", desc: "후처리기가 빈을 프록시로 감싸 @Transactional을 거는 원리 — AOP와 Dynamic Proxy 편." },
+  ]}
+/>

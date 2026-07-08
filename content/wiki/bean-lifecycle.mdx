@@ -1,0 +1,247 @@
+export const metadata = {
+  title: "Bean 생성 과정 — 설계도에서 완성된 객체까지",
+  date: "2026-07-08",
+  description:
+    "@Component 하나 붙였을 뿐인데 스프링은 그 객체를 알아서 만들어 꽂아 준다. 그 '알아서'의 내부를 연다. BeanDefinition이라는 설계도를 모으고 → 인스턴스를 만들고 → 의존성을 채우고 → 초기화하고 → 후처리로 마무리하는 다섯 단계를 순서대로 따라간다",
+  tags: ["백엔드", "Spring", "스프링 내부"],
+};
+
+# Bean 생성 과정 — 설계도에서 완성된 객체까지
+
+클래스에 `@Component`를 붙이고, 다른 곳에서 `@Autowired`로 받아 쓰면 끝.
+스프링을 쓰면 이만큼 단순하다. 하지만 그 사이에서 컨테이너는 꽤 여러
+단계를 거쳐 객체를 만들어 낸다. 이 글은 **"빈 하나가 태어나 쓸 수 있는
+상태가 되기까지"** 의 흐름을 순서대로 연다.
+
+이 과정을 알아 두면 좋은 이유가 있다. `@Autowired`가 왜 생성자에선 되는데
+필드 초기화 시점엔 아직 null인지, `@PostConstruct`가 왜 그 타이밍에
+불리는지, `@Transactional`을 붙인 빈이 왜 내가 만든 클래스가 아니라
+프록시인지 — 전부 이 생성 순서에서 설명된다.
+
+<Pipeline
+  stages={[
+    { label: "설계도 수집", sub: "BeanDefinition" },
+    { label: "인스턴스화", sub: "생성자 호출" },
+    { label: "의존성 주입", sub: "@Autowired" },
+    { label: "초기화", sub: "@PostConstruct" },
+    { label: "후처리", sub: "PostProcessor" },
+  ]}
+/>
+
+<Callout type="info" title="전제: 컨테이너부터 알고 오면 좋다">
+  <p className="m-0">
+    이 글은 컨테이너(ApplicationContext)가 이미 무엇인지 안다는 전제로
+    쓴다. "컨테이너가 뭔데?"가 먼저라면{" "}
+    <a href="/wiki/bean-factory-vs-application-context">
+      BeanFactory vs ApplicationContext
+    </a>{" "}
+    글을 먼저 보고 오는 걸 권한다.
+  </p>
+</Callout>
+
+---
+
+## 1. 설계도부터 모은다 — BeanDefinition
+
+스프링은 객체를 만들기 전에, **"무엇을 어떻게 만들지"의 설계도**를 먼저
+모은다. 이 설계도가 `BeanDefinition`이다. 실제 객체가 아니라, 객체를 만드는
+데 필요한 메타데이터다.
+
+<Steps
+  steps={[
+    {
+      title: "무엇을 담나",
+      desc: "클래스 이름, 스코프(싱글턴/프로토타입), 생성자 인자, 의존관계, 초기화 메서드 등.",
+      detail: (
+        <p className="m-0">
+          BeanDefinition은 "이 빈은 <code>OrderService</code> 클래스이고,
+          싱글턴이며, 생성자에 <code>PaymentClient</code>가 필요하다" 같은
+          정보를 담은 <strong>순수한 명세</strong>다. 아직 객체는 없다.
+        </p>
+      ),
+    },
+    {
+      title: "어디서 오나",
+      desc: "컴포넌트 스캔(@Component 등)과 @Bean 메서드, XML 설정에서 긁어모은다.",
+      detail: (
+        <p className="m-0">
+          <code>@ComponentScan</code>이 패키지를 훑어 애노테이션 붙은
+          클래스를 찾고, <code>@Configuration</code> 안의 <code>@Bean</code>{" "}
+          메서드도 각각 하나의 BeanDefinition이 된다.
+        </p>
+      ),
+    },
+    {
+      title: "왜 설계도를 따로 두나",
+      desc: "실제 생성 전에 후처리기가 설계도를 '수정'할 수 있게 하려고.",
+      detail: (
+        <p className="m-0">
+          객체를 만들기 전 단계에서 BeanDefinition을 손볼 수 있으면, 프로퍼티
+          기본값을 채우거나 특정 빈을 프록시로 바꿀 준비를 할 수 있다.
+          이 '설계도 단계 개입'이 스프링 확장성의 핵심이다.
+        </p>
+      ),
+    },
+  ]}
+/>
+
+<Aside term="BeanDefinition ≠ 객체">
+  이 단계가 끝나도 <strong>실제 객체는 아직 하나도 없다.</strong> 컨테이너는
+  "만들 것들의 목록(설계도)"만 손에 쥔 상태다. 생성은 그다음이다.
+</Aside>
+
+---
+
+## 2. 설계도대로 객체를 찍는다 — 인스턴스화
+
+설계도가 모이면, 컨테이너는 싱글턴 빈들을 (ApplicationContext 기준) 부팅
+시점에 **실제로 생성**하기 시작한다. 이때 먼저 일어나는 게 인스턴스화 —
+곧 **생성자 호출**이다.
+
+```java
+// 컨테이너가 사실상 이렇게 한다
+Object bean = beanDefinition.getConstructor().newInstance(args);
+```
+
+여기서 중요한 순서 감각이 하나 생긴다. **생성자가 불리는 이 시점엔, 아직
+필드 주입(@Autowired 필드)은 채워지지 않았다.** 그래서 필드에 `@Autowired`로
+받은 의존성을 생성자 본문에서 쓰면 null이다. 반면 **생성자 파라미터로 받는
+의존성**은 이 시점에 이미 넘어와 있다 — 그래서 생성자 주입이 안전하다.
+
+<Callout type="tip" title="생성자 주입이 권장되는 이유가 여기 있다">
+  <p className="m-0">
+    생성자 주입은 <strong>객체가 만들어지는 그 순간</strong> 의존성이
+    전부 채워지므로, "반쯤 만들어진 빈"이 존재할 수 없다. 필드 주입은
+    객체를 먼저 만든 뒤 나중에 값을 꽂으므로, 그 사이 틈에서 문제가 생길
+    여지가 있다.
+  </p>
+</Callout>
+
+---
+
+## 3. 빈 사이를 연결한다 — 의존성 주입
+
+객체가 만들어졌으면, 이제 그 객체가 필요로 하는 다른 빈들을 채워 넣는다.
+필드/세터 주입이 이 단계에서 처리된다. 컨테이너는 타입(또는 이름)으로
+맞는 빈을 찾아 꽂는다.
+
+<Sequence
+  left="컨테이너"
+  right="생성 중인 빈"
+  messages={[
+    { from: "left", label: "new OrderService(...)", note: "생성자 주입 의존성은 이때 이미 전달" },
+    { from: "left", label: "필드 @Autowired 채우기", note: "타입으로 맞는 빈을 찾아 주입" },
+    { from: "right", label: "의존성 준비 완료", note: "이제 협력 객체를 다 갖췄다" },
+  ]}
+/>
+
+이 "타입으로 맞는 빈을 찾아 꽂는" 일을 실제로 수행하는 건 컨테이너 자신이
+아니라, `@Autowired`를 해석하는 **후처리기**다. 그 후처리기가 어떻게
+동작하는지는 5단계에서 다시 나온다.
+
+<Aside term="순환 참조">
+  A가 B를, B가 A를 필요로 하면 서로를 채우다 막힐 수 있다. 스프링은 이걸
+  탐지해 에러를 내거나(생성자 순환), 일부는 조기 참조로 풀어낸다. 순환
+  참조가 보이면 설계를 되짚어 보라는 신호다.
+</Aside>
+
+---
+
+## 4. 쓸 준비를 마친다 — 초기화 콜백
+
+의존성까지 다 채워졌으면, "이제 협력 객체가 다 준비됐으니 초기 세팅을
+해라"는 신호를 줄 차례다. 이게 **초기화 콜백**이다.
+
+<Steps
+  steps={[
+    {
+      title: "@PostConstruct",
+      desc: "의존성 주입이 끝난 직후 한 번 호출되는 메서드. 초기 캐시 워밍업 등에 쓴다.",
+      detail: (
+        <p className="m-0">
+          생성자가 아니라 이 시점에 초기화 로직을 두는 이유는 분명하다.{" "}
+          <strong>이때는 의존성이 전부 채워져 있어서</strong>, 주입받은 빈을
+          안전하게 쓸 수 있기 때문이다.
+        </p>
+      ),
+    },
+    {
+      title: "InitializingBean.afterPropertiesSet()",
+      desc: "인터페이스로 초기화 훅을 거는 방법. 프레임워크 코드에서 자주 보인다.",
+    },
+    {
+      title: "@Bean(initMethod = ...)",
+      desc: "설정에서 초기화 메서드를 지정하는 방식. 외부 라이브러리 객체에 유용.",
+    },
+  ]}
+/>
+
+순서 감각을 한 번 더 못 박자: **생성자 → 의존성 주입 → 초기화 콜백.**
+`@PostConstruct`가 생성자보다 나중인 건 우연이 아니라, "의존성이 준비된
+뒤"라는 계약을 지키기 위한 설계다.
+
+---
+
+## 5. 마지막에 손을 댄다 — 후처리(BeanPostProcessor)
+
+초기화 앞뒤로, 컨테이너는 **BeanPostProcessor**라는 확장 지점에 빈을
+한 번씩 통과시킨다. 이게 스프링 마법의 상당 부분이 벌어지는 곳이다.
+
+```java
+// 개념적으로 컨테이너는 각 빈에 대해 이렇게 한다
+bean = postProcessBeforeInitialization(bean);   // 초기화 전
+invokeInitMethods(bean);                        // @PostConstruct 등
+bean = postProcessAfterInitialization(bean);    // 초기화 후 ← 프록시 교체 지점
+```
+
+<Callout type="deep" title="여기서 '완성된 빈'이 프록시로 바뀔 수 있다">
+  <p className="m-0">
+    <code>@Transactional</code>이나 <code>@Cacheable</code>이 붙은 빈은,{" "}
+    <strong>초기화 후 후처리 단계</strong>에서 원본 객체가 그것을 감싼{" "}
+    프록시 객체로 교체된다. 그래서 컨테이너에서 꺼낸 빈이 "내가 만든
+    클래스"가 아니라 프록시인 것이다. 이 원리는{" "}
+    <a href="/wiki/aop-dynamic-proxy">AOP와 Dynamic Proxy</a> 글에서 파헤친다.
+  </p>
+</Callout>
+
+`@Autowired`를 해석해 값을 꽂는 것도, `@PostConstruct`를 찾아 호출하는
+것도 실은 각각의 BeanPostProcessor가 하는 일이다. 즉 **후처리기는 생성
+과정 곳곳에 끼어들어 "애노테이션을 실제 동작으로 바꾸는" 일꾼**이다.
+자세한 건 <a href="/wiki/bean-post-processor">BeanPostProcessor</a> 글로
+이어진다.
+
+---
+
+## 6. 전체 순서 한눈에
+
+<Steps
+  steps={[
+    { title: "① 설계도 수집", desc: "컴포넌트 스캔·@Bean으로 BeanDefinition을 모은다. 아직 객체는 없다." },
+    { title: "② 인스턴스화", desc: "설계도대로 생성자를 호출해 객체를 만든다. 생성자 주입 의존성은 이때 전달된다." },
+    { title: "③ 의존성 주입", desc: "필드/세터 @Autowired를 타입으로 찾아 채운다." },
+    { title: "④ 초기화 전 후처리", desc: "postProcessBeforeInitialization — @PostConstruct 호출 준비 등." },
+    { title: "⑤ 초기화 콜백", desc: "@PostConstruct / afterPropertiesSet — 의존성이 준비된 뒤 초기 세팅." },
+    { title: "⑥ 초기화 후 후처리", desc: "postProcessAfterInitialization — AOP 프록시로 교체되는 지점." },
+    { title: "⑦ 사용 가능", desc: "완성된 (혹은 프록시로 감싸진) 빈이 컨테이너에 보관되어 주입·조회에 쓰인다." },
+  ]}
+/>
+
+정리하면, `@Component` 하나 뒤에는 **설계도 → 생성 → 주입 → 초기화 →
+후처리**라는 정해진 파이프라인이 돌고 있다. 이 순서를 손에 쥐고 있으면,
+스프링에서 마주치는 타이밍 관련 버그의 절반은 "아, 이 시점엔 아직
+그게 준비 안 됐구나"로 스스로 풀린다.
+
+---
+
+## 한 장 요약
+
+<Steps
+  steps={[
+    { title: "왜", desc: "@Component 뒤에서 컨테이너가 객체를 만드는 정해진 순서를 알면, 주입·초기화 타이밍 버그가 스스로 풀린다." },
+    { title: "BeanDefinition", desc: "실제 객체가 아니라 '무엇을 어떻게 만들지'의 설계도. 생성 전에 후처리로 손볼 수도 있다." },
+    { title: "핵심 순서", desc: "생성자 → 의존성 주입 → 초기화 콜백(@PostConstruct). @PostConstruct가 나중인 건 의존성이 준비된 뒤라는 계약." },
+    { title: "생성자 주입", desc: "만들어지는 순간 의존성이 다 채워져 '반쯤 만들어진 빈'이 없다 — 그래서 권장된다." },
+    { title: "후처리", desc: "@Autowired 해석·@PostConstruct 호출·AOP 프록시 교체가 전부 BeanPostProcessor에서 일어난다." },
+    { title: "다음 글", desc: "그 후처리기가 정확히 무슨 일을 하는지 — BeanPostProcessor 편으로 이어진다." },
+  ]}
+/>
